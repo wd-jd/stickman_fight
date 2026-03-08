@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stickman Sword Fight</title>
+    <style>
+        body { text-align: center; background-color: #2c3e50; color: white; font-family: sans-serif; }
+        canvas { background-color: #ecf0f1; border: 5px solid #34495e; display: block; margin: 20px auto; }
+        .stats { font-size: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>Stickman Sword Battle</h1>
+    <div class="stats">
+        Player Health: <span id="p1Health">100</span> | 
+        Enemy Health: <span id="p2Health">100</span>
+    </div>
+    
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // Game Variables
+        let p1 = { x: 100, y: 300, health: 100, attacking: false, color: "blue" };
+        let p2 = { x: 600, y: 300, health: 100, attacking: false, color: "red" };
+        let keys = {};
+
+        // Listen for keys
+        window.addEventListener("keydown", (e) => keys[e.code] = true);
+        window.addEventListener("keyup", (e) => keys[e.code] = false);
+
+        function drawStickman(person, isAttacking) {
+            ctx.strokeStyle = person.color;
+            ctx.lineWidth = 4;
+
+            // Head
+            ctx.beginPath();
+            ctx.arc(person.x, person.y - 60, 15, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Body
+            ctx.beginPath();
+            ctx.moveTo(person.x, person.y - 45);
+            ctx.lineTo(person.x, person.y);
+            ctx.stroke();
+
+            // Legs
+            ctx.beginPath();
+            ctx.moveTo(person.x, person.y);
+            ctx.lineTo(person.x - 15, person.y + 30);
+            ctx.moveTo(person.x, person.y);
+            ctx.lineTo(person.x + 15, person.y + 30);
+            ctx.stroke();
+
+            // Arms & Sword
+            ctx.beginPath();
+            ctx.moveTo(person.x, person.y - 30);
+            if (isAttacking) {
+                // Swinging sword position
+                ctx.lineTo(person.x + 40, person.y - 40); // Arm
+                ctx.strokeStyle = "silver";
+                ctx.lineWidth = 6;
+                ctx.lineTo(person.x + 70, person.y - 70); // Sword blade
+            } else {
+                // Relaxed sword position
+                ctx.lineTo(person.x + 20, person.y - 10); // Arm
+                ctx.strokeStyle = "silver";
+                ctx.lineWidth = 6;
+                ctx.lineTo(person.x + 40, person.y + 10); // Sword blade
+            }
+            ctx.stroke();
+        }
+
+        function update() {
+            // Player Movement (Arrow Keys)
+            if (keys["ArrowLeft"] && p1.x > 20) p1.x -= 5;
+            if (keys["ArrowRight"] && p1.x < canvas.width - 20) p1.x += 5;
+
+            // Simple "AI" for Enemy (moves back and forth)
+            if (p2.x > p1.x + 80) p2.x -= 2;
+            else if (p2.x < p1.x + 80) p2.x += 2;
+
+            // Attack Logic (Space Bar)
+            if (keys["Space"] && !p1.attacking) {
+                p1.attacking = true;
+                // Check if close enough to hit enemy
+                if (Math.abs(p1.x - p2.x) < 80) {
+                    p2.health -= 2;
+                }
+                // Stop attacking after 200 milliseconds
+                setTimeout(() => { p1.attacking = false; }, 200);
+            }
+
+            // Check for Game Over/Restart
+            if (p1.health <= 0 || p2.health <= 0) {
+                p1.health = 100;
+                p2.health = 100;
+                p1.x = 100;
+                p2.x = 600;
+            }
+
+            // Update UI
+            document.getElementById("p1Health").innerText = p1.health;
+            document.getElementById("p2Health").innerText = p2.health;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear screen
+            
+            // Draw Ground
+            ctx.strokeStyle = "#34495e";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 330);
+            ctx.lineTo(800, 330);
+            ctx.stroke();
+
+            drawStickman(p1, p1.attacking);
+            drawStickman(p2, false); // Enemy doesn't attack yet
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
