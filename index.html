@@ -1,133 +1,701 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Stickman Sword Fight</title>
-    <style>
-        body { text-align: center; background-color: #2c3e50; color: white; font-family: sans-serif; }
-        canvas { background-color: #ecf0f1; border: 5px solid #34495e; display: block; margin: 20px auto; }
-        .stats { font-size: 20px; font-weight: bold; }
-    </style>
+  <title>Stickman Fight</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d0d1a; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; }
+    canvas { display: block; border: 2px solid #333; }
+    #controls { color: #444; font-size: 11px; margin-top: 8px; letter-spacing: 0.04em; }
+    #controls span { color: #777; }
+  </style>
 </head>
 <body>
+<canvas id="game" width="800" height="460"></canvas>
+<div id="controls">
+  <span>P1:</span> ←→ move · ↑ jump · ↓ block · SPACE slash · ↓+SPACE heavy slash &nbsp;&nbsp;
+  <span>P2:</span> AD move · W jump · S block · E slash · S+E heavy slash &nbsp;&nbsp;
+  <span>R</span> restart
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const GROUND = 390;
+const GRAVITY = 0.55;
+const JUMP_VEL = -15;
+const MOVE_SPEED = 4.5;
 
-    <h1>Stickman Sword Battle</h1>
-    <div class="stats">
-        Player Health: <span id="p1Health">100</span> | 
-        Enemy Health: <span id="p2Health">100</span>
-    </div>
-    
-    <canvas id="gameCanvas" width="800" height="400"></canvas>
+// Attack configs: dmg, totalFrames, cooldownFrames, reach, knockbackX, knockbackY, hitboxStart, hitboxEnd, stunFrames
+const ATK = {
+  punch: { dmg: 5,  totalF: 18, coolF: 35, kbX: 3,  kbY: -1, hitS: 4,  hitE: 14, stun: 8  },
+  kick:  { dmg: 5,  totalF: 28, coolF: 58, kbX: 9,  kbY: -5, hitS: 8,  hitE: 20, stun: 16 },
+};
 
-    <script>
-        const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
 
-        // Game Variables
-        let p1 = { x: 100, y: 300, health: 100, attacking: false, color: "blue" };
-        let p2 = { x: 600, y: 300, health: 100, attacking: false, color: "red" };
-        let keys = {};
+// FX pools
+const particles = [];
+const dmgNums   = [];
+let shakeTimer = 0, shakeStrX = 0, shakeStrY = 0;
 
-        // Listen for keys
-        window.addEventListener("keydown", (e) => keys[e.code] = true);
-        window.addEventListener("keyup", (e) => keys[e.code] = false);
+// Match state
+let state = 'countdown'; // 'countdown' | 'fight' | 'roundEnd' | 'matchOver'
+let stateTimer = 0;
+let roundNum = 1;
+let p1Wins = 0, p2Wins = 0;
+let matchWinnerName = '';
 
-        function drawStickman(person, isAttacking) {
-            ctx.strokeStyle = person.color;
-            ctx.lineWidth = 4;
+function makePlayer(x, color, name, face) {
+  return {
+    x, y: GROUND, vx: 0, vy: 0,
+    hp: 100, maxHp: 100, displayHp: 100,
+    face, color, name,
+    atkTimer: 0, atkCool: 0, atkType: null, hitLanded: false,
+    blocking: false,
+    shieldTimer: 180, shieldCool: 0,   // 3 s active, 5 s cooldown at 60 fps
+    stunTimer: 0, flashTimer: 0,
+    kbVx: 0, kbVy: 0,
+    onGround: true, walkFrame: 0, walkTick: 0,
+    combo: 0, comboTimer: 0,
+  };
+}
 
-            // Head
-            ctx.beginPath();
-            ctx.arc(person.x, person.y - 60, 15, 0, Math.PI * 2);
-            ctx.stroke();
+let p1, p2;
 
-            // Body
-            ctx.beginPath();
-            ctx.moveTo(person.x, person.y - 45);
-            ctx.lineTo(person.x, person.y);
-            ctx.stroke();
+function initRound() {
+  p1 = makePlayer(180, '#5bf', 'P1', 1);
+  p2 = makePlayer(620, '#fa6', 'P2', -1);
+  particles.length = 0;
+  dmgNums.length = 0;
+  state = 'countdown';
+  stateTimer = 100;
+}
 
-            // Legs
-            ctx.beginPath();
-            ctx.moveTo(person.x, person.y);
-            ctx.lineTo(person.x - 15, person.y + 30);
-            ctx.moveTo(person.x, person.y);
-            ctx.lineTo(person.x + 15, person.y + 30);
-            ctx.stroke();
+function initMatch() {
+  p1Wins = 0; p2Wins = 0; roundNum = 1; matchWinnerName = '';
+  initRound();
+}
+initMatch();
 
-            // Arms & Sword
-            ctx.beginPath();
-            ctx.moveTo(person.x, person.y - 30);
-            if (isAttacking) {
-                // Swinging sword position
-                ctx.lineTo(person.x + 40, person.y - 40); // Arm
-                ctx.strokeStyle = "silver";
-                ctx.lineWidth = 6;
-                ctx.lineTo(person.x + 70, person.y - 70); // Sword blade
-            } else {
-                // Relaxed sword position
-                ctx.lineTo(person.x + 20, person.y - 10); // Arm
-                ctx.strokeStyle = "silver";
-                ctx.lineWidth = 6;
-                ctx.lineTo(person.x + 40, person.y + 10); // Sword blade
-            }
-            ctx.stroke();
-        }
+document.addEventListener('keydown', e => { if (e.code === 'KeyR') initMatch(); });
 
-        function update() {
-            // Player Movement (Arrow Keys)
-            if (keys["ArrowLeft"] && p1.x > 20) p1.x -= 5;
-            if (keys["ArrowRight"] && p1.x < canvas.width - 20) p1.x += 5;
+// ─── INPUT ───────────────────────────────────────────────────────────────────
+function handleInput() {
+  if (state !== 'fight') return;
 
-            // Simple "AI" for Enemy (moves back and forth)
-            if (p2.x > p1.x + 80) p2.x -= 2;
-            else if (p2.x < p1.x + 80) p2.x += 2;
+  // P1
+  const p1CanAct = p1.stunTimer <= 0 && p1.atkTimer <= 0;
+  const p1WantsBlock = keys['ArrowDown'] && !keys['ArrowLeft'] && !keys['ArrowRight'] && p1.onGround && p1CanAct && p1.shieldCool <= 0 && p1.shieldTimer > 0;
+  p1.blocking = p1WantsBlock;
+  if (p1.stunTimer <= 0 && !p1WantsBlock) {
+    if      (keys['ArrowLeft'])  { p1.vx = -MOVE_SPEED; p1.face = -1; }
+    else if (keys['ArrowRight']) { p1.vx =  MOVE_SPEED; p1.face =  1; }
+    else p1.vx = 0;
+    if (keys['ArrowUp'] && p1.onGround) { p1.vy = JUMP_VEL; p1.onGround = false; }
+    if (keys['Space'] && p1.atkCool <= 0) {
+      const t = keys['ArrowDown'] ? 'kick' : 'punch';
+      p1.atkTimer = ATK[t].totalF; p1.atkCool = ATK[t].coolF;
+      p1.atkType = t; p1.hitLanded = false;
+    }
+  } else if (p1WantsBlock) { p1.vx = 0; }
 
-            // Attack Logic (Space Bar)
-            if (keys["Space"] && !p1.attacking) {
-                p1.attacking = true;
-                // Check if close enough to hit enemy
-                if (Math.abs(p1.x - p2.x) < 80) {
-                    p2.health -= 2;
-                }
-                // Stop attacking after 200 milliseconds
-                setTimeout(() => { p1.attacking = false; }, 200);
-            }
+  // P2
+  const p2CanAct = p2.stunTimer <= 0 && p2.atkTimer <= 0;
+  const p2WantsBlock = keys['KeyS'] && !keys['KeyA'] && !keys['KeyD'] && p2.onGround && p2CanAct && p2.shieldCool <= 0 && p2.shieldTimer > 0;
+  p2.blocking = p2WantsBlock;
+  if (p2.stunTimer <= 0 && !p2WantsBlock) {
+    if      (keys['KeyA']) { p2.vx = -MOVE_SPEED; p2.face = -1; }
+    else if (keys['KeyD']) { p2.vx =  MOVE_SPEED; p2.face =  1; }
+    else p2.vx = 0;
+    if (keys['KeyW'] && p2.onGround) { p2.vy = JUMP_VEL; p2.onGround = false; }
+    if (keys['KeyE'] && p2.atkCool <= 0) {
+      const t = keys['KeyS'] ? 'kick' : 'punch';
+      p2.atkTimer = ATK[t].totalF; p2.atkCool = ATK[t].coolF;
+      p2.atkType = t; p2.hitLanded = false;
+    }
+  } else if (p2WantsBlock) { p2.vx = 0; }
+}
 
-            // Check for Game Over/Restart
-            if (p1.health <= 0 || p2.health <= 0) {
-                p1.health = 100;
-                p2.health = 100;
-                p1.x = 100;
-                p2.x = 600;
-            }
+// ─── UPDATE ──────────────────────────────────────────────────────────────────
+function updatePlayer(p) {
+  if (p.stunTimer > 0) { p.vx *= 0.75; p.stunTimer--; }
+  p.vy += GRAVITY;
+  p.x += p.vx + p.kbVx;
+  p.y += p.vy  + p.kbVy;
+  p.kbVx *= 0.65;
+  p.kbVy *= 0.65;
 
-            // Update UI
-            document.getElementById("p1Health").innerText = p1.health;
-            document.getElementById("p2Health").innerText = p2.health;
-        }
+  if (p.y >= GROUND) { p.y = GROUND; p.vy = 0; p.onGround = true; }
+  p.x = Math.max(20, Math.min(W - 20, p.x));
 
-        function draw() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear screen
-            
-            // Draw Ground
-            ctx.strokeStyle = "#34495e";
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(0, 330);
-            ctx.lineTo(800, 330);
-            ctx.stroke();
+  if (p.atkTimer  > 0) p.atkTimer--;
+  if (p.atkCool   > 0) p.atkCool--;
+  if (p.flashTimer > 0) p.flashTimer--;
+  if (p.comboTimer > 0) { p.comboTimer--; if (p.comboTimer <= 0) p.combo = 0; }
 
-            drawStickman(p1, p1.attacking);
-            drawStickman(p2, false); // Enemy doesn't attack yet
-        }
+  // Shield timer & cooldown
+  if (p.blocking) {
+    p.shieldTimer--;
+    if (p.shieldTimer <= 0) {
+      p.shieldTimer = 0;
+      p.blocking = false;
+      p.shieldCool = 300; // 5 s cooldown
+      spawnParticles(p.x + p.face * 28, p.y - 62, '#aaa', 6);
+    }
+  } else if (p.shieldCool > 0) {
+    p.shieldCool--;
+    if (p.shieldCool <= 0) p.shieldTimer = 180; // fully recharged
+  }
 
-        function gameLoop() {
-            update();
-            draw();
-            requestAnimationFrame(gameLoop);
-        }
+  // Smooth HP display
+  if (p.displayHp > p.hp) p.displayHp = Math.max(p.hp, p.displayHp - 1.5);
 
-        gameLoop();
-    </script>
+  if (p.vx !== 0 && p.onGround) {
+    p.walkTick++;
+    if (p.walkTick >= 7) { p.walkFrame = (p.walkFrame + 1) % 4; p.walkTick = 0; }
+  } else if (p.onGround) { p.walkFrame = 0; p.walkTick = 0; }
+}
+
+function checkHit(atk, def) {
+  if (!atk.atkType || atk.atkTimer <= 0 || atk.hitLanded) return;
+  const cfg = ATK[atk.atkType];
+  const phase = cfg.totalF - atk.atkTimer;
+  if (phase < cfg.hitS || phase > cfg.hitE) return;
+
+  // Use actual sword tip position to match visuals
+  const swAngle = swordAngleFor(atk);
+  const tipX = atk.x + Math.cos(swAngle) * SWORD_TOTAL;
+  const tipY = (atk.y - 67) + Math.sin(swAngle) * SWORD_TOTAL;
+  const defCY = def.y - 50;
+
+  if (Math.abs(def.x - tipX) < 48 && Math.abs(defCY - tipY) < 55) {
+    const blocked = def.blocking && !def.stunTimer;
+    let dmg = blocked ? Math.ceil(cfg.dmg * 0.15) : cfg.dmg;
+
+    def.hp = Math.max(0, def.hp - dmg);
+    atk.hitLanded = true;
+
+    const kbScale = blocked ? 0.25 : 1;
+    def.kbVx = atk.face * cfg.kbX * kbScale;
+    def.kbVy = blocked ? 0 : cfg.kbY;
+    if (!blocked) def.stunTimer = cfg.stun;
+    def.flashTimer = blocked ? 5 : 14;
+
+    if (!blocked) {
+      shakeTimer  = atk.atkType === 'kick' ? 10 : 5;
+      shakeStrX   = atk.atkType === 'kick' ? 7  : 3;
+      shakeStrY   = atk.atkType === 'kick' ? 4  : 2;
+    }
+
+    atk.combo++;
+    atk.comboTimer = 90;
+
+    const pColor = blocked ? '#aaa' : def.color;
+    spawnParticles(def.x, def.y - (atk.atkType === 'kick' ? 28 : 64), pColor, blocked ? 3 : 9);
+
+    dmgNums.push({
+      x: def.x + (Math.random() - 0.5) * 20,
+      y: def.y - 90,
+      vy: -2.2, life: 50, maxLife: 50,
+      text: blocked ? `${dmg} blocked` : `${dmg}${atk.atkType === 'kick' ? ' HEAVY' : ''}`,
+      color: blocked ? '#888' : (atk.atkType === 'kick' ? '#ff4' : '#fff'),
+      big: !blocked && atk.atkType === 'kick',
+    });
+
+    if (def.hp <= 0) endRound(atk);
+  }
+}
+
+function endRound(winnerPlayer) {
+  if (state !== 'fight') return;
+  if (winnerPlayer === p1) p1Wins++; else p2Wins++;
+  if (p1Wins >= 2 || p2Wins >= 2) {
+    matchWinnerName = winnerPlayer.name;
+    state = 'matchOver';
+  } else {
+    roundNum++;
+    state = 'roundEnd';
+    stateTimer = 140;
+  }
+}
+
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 2 + Math.random() * 5;
+    particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s - 2,
+      life: 24, maxLife: 24, color, r: 1.5 + Math.random() * 2 });
+  }
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
+const legCycle = [0.35, 0.15, -0.35, -0.15];
+
+// Sword constants
+const ARM_LEN   = 20;
+const GRIP_LEN  = 13;
+const BLADE_LEN = 45;
+const SWORD_TOTAL = ARM_LEN + GRIP_LEN + BLADE_LEN; // shoulder → tip
+
+function swordAngleFor(p) {
+  const f = p.face;
+  const isAtk = p.atkTimer > 0 && p.atkType;
+  let base;
+  if (p.blocking) {
+    base = 0.3; // sword held low at side while shield takes front
+  } else if (isAtk && p.atkType === 'punch') {
+    // horizontal slash: -1.3 → +0.4 over full attack
+    const t = Math.max(0, Math.min(1, (ATK.punch.totalF - p.atkTimer) / ATK.punch.totalF));
+    base = -1.3 + t * 1.7;
+  } else if (isAtk && p.atkType === 'kick') {
+    // overhead heavy chop: -2.3 → +0.6
+    const t = Math.max(0, Math.min(1, (ATK.kick.totalF - p.atkTimer) / ATK.kick.totalF));
+    base = -2.3 + t * 2.9;
+  } else {
+    // idle ready stance — slight bob when walking
+    const bob = p.onGround && p.vx !== 0 ? Math.sin(p.walkFrame * Math.PI / 2) * 0.08 : 0;
+    base = -0.25 + bob;
+  }
+  return f === 1 ? base : Math.PI - base;
+}
+
+function drawShield(cx, cy, col) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // Kite shield body
+  ctx.beginPath();
+  ctx.moveTo(-10, -13);
+  ctx.lineTo(10, -13);
+  ctx.quadraticCurveTo(13, 2, 7, 13);
+  ctx.lineTo(0, 21);
+  ctx.lineTo(-7, 13);
+  ctx.quadraticCurveTo(-13, 2, -10, -13);
+  ctx.closePath();
+  ctx.fillStyle = '#1b1f3a'; ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+  // Cross emblem
+  ctx.strokeStyle = col + 'aa'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(0, 11); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-6, 1); ctx.lineTo(6, 1); ctx.stroke();
+  // Center boss
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(0, 1, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawSword(hiltX, hiltY, angle, col) {
+  ctx.save();
+  ctx.translate(hiltX, hiltY);
+  ctx.rotate(angle);
+  ctx.lineCap = 'round';
+  // Grip
+  ctx.strokeStyle = '#8b5e2a'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(GRIP_LEN, 0); ctx.stroke();
+  // Crossguard
+  ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(GRIP_LEN, -9); ctx.lineTo(GRIP_LEN, 9); ctx.stroke();
+  // Blade body
+  ctx.strokeStyle = '#c8dcff'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(GRIP_LEN, 0); ctx.lineTo(GRIP_LEN + BLADE_LEN, 0); ctx.stroke();
+  // Blade highlight edge
+  ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(GRIP_LEN + 2, -0.5); ctx.lineTo(GRIP_LEN + BLADE_LEN - 4, 0); ctx.stroke();
+  // Tip taper
+  ctx.strokeStyle = '#c8dcff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(GRIP_LEN + BLADE_LEN, 0); ctx.lineTo(GRIP_LEN + BLADE_LEN + 6, 1.5); ctx.stroke();
+  ctx.restore();
+}
+
+function drawPlayer(p) {
+  const { x, y, face: f } = p;
+  const flash = p.flashTimer > 0 && Math.floor(p.flashTimer / 2) % 2 === 0;
+  const col = flash ? '#fff' : p.color;
+  const isAtk = p.atkTimer > 0 && p.atkType;
+  const cfg   = isAtk ? ATK[p.atkType] : null;
+  const phase = isAtk ? (cfg.totalF - p.atkTimer) : 0;
+  const atkT  = isAtk ? Math.max(0, Math.sin((phase - cfg.hitS) / (cfg.hitE - cfg.hitS) * Math.PI)) : 0;
+  const leg   = p.onGround && p.vx !== 0 ? legCycle[p.walkFrame] : 0;
+  const air   = !p.onGround ? 0.2 : 0;
+  const hunch = p.blocking ? 8 : 0;
+
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, GROUND + 6, 18, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = col; ctx.fillStyle = col;
+
+  // Head
+  ctx.beginPath(); ctx.arc(x, y - 86 + hunch * 0.4, 13, 0, Math.PI * 2); ctx.stroke();
+  // Eye
+  ctx.beginPath(); ctx.arc(x + f * 5, y - 88 + hunch * 0.4, 2, 0, Math.PI * 2); ctx.fill();
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(x, y - 73 + hunch);
+  ctx.lineTo(x, y - 44);
+  ctx.stroke();
+
+  // Legs (always normal — no kick leg)
+  const lA = leg + air, lB = -leg + air;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 44);
+  ctx.lineTo(x - lA * 28, y - 22);
+  ctx.lineTo(x - lA * 14, y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x, y - 44);
+  ctx.lineTo(x + lB * 28, y - 22);
+  ctx.lineTo(x + lB * 14, y);
+  ctx.stroke();
+
+  // Sword arm
+  const swAngle = swordAngleFor(p);
+  const shoulderX = x, shoulderY = y - 67 + hunch;
+  const handX = shoulderX + Math.cos(swAngle) * ARM_LEN;
+  const handY = shoulderY + Math.sin(swAngle) * ARM_LEN;
+
+  // Draw sword BEHIND player when raising overhead (heavy attack wind-up)
+  const isHeavy = isAtk && p.atkType === 'kick';
+  const isWindup = isHeavy && phase < cfg.hitS;
+  if (isWindup) drawSword(handX, handY, swAngle, col);
+
+  // Sword arm line
+  ctx.strokeStyle = col; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(shoulderX, shoulderY); ctx.lineTo(handX, handY); ctx.stroke();
+
+  // Off-hand: shield when blocking, second grip on heavy, free arm otherwise
+  if (p.blocking) {
+    // Shield arm extends forward
+    const shieldArmX = x + f * 22;
+    const shieldArmY = y - 66 + hunch;
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 63 + hunch);
+    ctx.lineTo(shieldArmX, shieldArmY);
+    ctx.stroke();
+    // Shield drawn at end of arm
+    drawShield(shieldArmX + f * 6, shieldArmY + 4, col);
+  } else if (isHeavy) {
+    // Second hand on sword during heavy chop
+    const grip2X = handX + Math.cos(swAngle) * 8;
+    const grip2Y = handY + Math.sin(swAngle) * 8;
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 61 + hunch);
+    ctx.lineTo(grip2X, grip2Y);
+    ctx.stroke();
+  } else {
+    // Free back arm swings opposite for balance
+    const sw = p.onGround && p.vx !== 0 ? -leg * 16 : 0;
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 67 + hunch);
+    ctx.lineTo(x - f * 15 + sw, y - 54 + hunch);
+    ctx.stroke();
+  }
+
+  // Draw sword in front during normal phases
+  if (!isWindup) drawSword(handX, handY, swAngle, col);
+
+  // Name
+  ctx.fillStyle = col; ctx.globalAlpha = 0.75;
+  ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(p.name, x, y - 104);
+  ctx.globalAlpha = 1;
+
+  // Floating HP bar above player
+  const bw = 50, bh = 5, bx = x - bw / 2, by = y - 118;
+  const hpPct     = p.hp / p.maxHp;
+  const ghostPct  = p.displayHp / p.maxHp;
+  // Track
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.beginPath(); ctx.roundRect(bx - 1, by - 1, bw + 2, bh + 2, 2); ctx.fill();
+  // Ghost (delayed drain, red)
+  if (ghostPct > hpPct) {
+    ctx.fillStyle = 'rgba(200,40,40,0.75)';
+    ctx.beginPath(); ctx.roundRect(bx, by, bw * ghostPct, bh, 2); ctx.fill();
+  }
+  // Live HP fill — green → yellow → red
+  const hpColor = hpPct > 0.5 ? '#4e4' : hpPct > 0.25 ? '#ec0' : '#e33';
+  ctx.fillStyle = hpColor;
+  ctx.globalAlpha = 0.9;
+  if (hpPct > 0) { ctx.beginPath(); ctx.roundRect(bx, by, bw * hpPct, bh, 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  // Border
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 2); ctx.stroke();
+
+  // Shield status bar (below HP bar)
+  const sby = by + bh + 3;
+  const sbh = 3;
+  // Track
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath(); ctx.roundRect(bx, sby, bw, sbh, 1); ctx.fill();
+  if (p.shieldCool > 0) {
+    // Cooldown — red drain left to right
+    const cdPct = 1 - p.shieldCool / 300;
+    ctx.fillStyle = 'rgba(180,40,40,0.7)';
+    ctx.beginPath(); ctx.roundRect(bx, sby, bw * cdPct, sbh, 1); ctx.fill();
+  } else {
+    // Shield available — blue fill
+    const sPct = p.shieldTimer / 180;
+    ctx.fillStyle = sPct > 0.4 ? 'rgba(80,180,255,0.8)' : 'rgba(255,160,40,0.8)';
+    ctx.beginPath(); ctx.roundRect(bx, sby, bw * sPct, sbh, 1); ctx.fill();
+  }
+}
+
+function drawParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.35; p.life--;
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * (p.life / p.maxLife), 0, Math.PI * 2);
+    ctx.fill();
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDmgNums() {
+  for (let i = dmgNums.length - 1; i >= 0; i--) {
+    const d = dmgNums[i];
+    d.y += d.vy; d.vy *= 0.92; d.life--;
+    const alpha = Math.min(1, d.life / 20);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = d.color;
+    ctx.font = d.big ? 'bold 20px monospace' : 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(d.text, d.x, d.y);
+    if (d.life <= 0) dmgNums.splice(i, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawCombo(p, side) {
+  if (p.combo < 2 || p.comboTimer <= 0) return;
+  const cx = side === 'left' ? 60 : W - 60;
+  const alpha = Math.min(1, p.comboTimer / 20);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = p.color;
+  ctx.font = `bold ${18 + Math.min(p.combo, 10) * 2}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(`${p.combo}x COMBO`, cx, H / 2 - 20);
+  ctx.globalAlpha = 1;
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y,   x+w, y+r);
+  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);  ctx.quadraticCurveTo(x,   y+h, x,   y+h-r);
+  ctx.lineTo(x, y+r);    ctx.quadraticCurveTo(x,   y,   x+r, y);
+  ctx.closePath();
+}
+
+function drawHUD() {
+  const bw = 220, bh = 22, mt = 12, ml = 18, r = 4;
+
+  function hpBar(bx, by, pct, dispPct, color, label, align) {
+    // Track
+    ctx.fillStyle = '#111'; roundRect(bx, by, bw, bh, r); ctx.fill();
+    // Ghost (delayed drain)
+    if (dispPct > pct) {
+      ctx.fillStyle = '#a22';
+      const ghost = bw * dispPct;
+      if (align === 'left') { roundRect(bx, by, ghost, bh, r); }
+      else { roundRect(bx + bw - ghost, by, ghost, bh, r); }
+      ctx.fill();
+    }
+    // Fill
+    const fw = Math.max(0, bw * pct);
+    if (fw > 0) {
+      ctx.fillStyle = pct > 0.5 ? color : pct > 0.25 ? '#e90' : '#e33';
+      if (align === 'left') { roundRect(bx, by, fw, bh, r); }
+      else { roundRect(bx + bw - fw, by, fw, bh, r); }
+      ctx.fill();
+    }
+    // Border
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 1;
+    roundRect(bx, by, bw, bh, r); ctx.stroke();
+    // Text
+    ctx.fillStyle = '#eee';
+    ctx.font = 'bold 12px monospace'; ctx.textAlign = align;
+    ctx.fillText(label, align === 'left' ? bx + 7 : bx + bw - 7, by + bh - 6);
+  }
+
+  hpBar(ml, mt, p1.hp / p1.maxHp, p1.displayHp / p1.maxHp, '#5bf', `P1  ${Math.ceil(p1.hp)}`, 'left');
+  hpBar(W - ml - bw, mt, p2.hp / p2.maxHp, p2.displayHp / p2.maxHp, '#fa6', `${Math.ceil(p2.hp)}  P2`, 'right');
+
+  // Round indicators (dots)
+  for (let i = 0; i < 2; i++) {
+    const ox = ml + bw / 2 - 12 + i * 24;
+    ctx.beginPath(); ctx.arc(ox, mt + bh / 2, 5, 0, Math.PI * 2);
+    ctx.fillStyle = i < p1Wins ? '#5bf' : '#222'; ctx.fill();
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  for (let i = 0; i < 2; i++) {
+    const ox = W - ml - bw / 2 + 12 - i * 24;
+    ctx.beginPath(); ctx.arc(ox, mt + bh / 2, 5, 0, Math.PI * 2);
+    ctx.fillStyle = i < p2Wins ? '#fa6' : '#222'; ctx.fill();
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Round label center
+  ctx.fillStyle = '#555'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`RND ${roundNum}`, W / 2, mt + bh - 6);
+
+  // Attack cooldown pips (arc below bars)
+  function atkCoolPip(px, cool, totalCool, color) {
+    const pct = cool <= 0 ? 1 : 1 - cool / totalCool;
+    ctx.strokeStyle = color + '44'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(px, mt + bh + 10, 7, -Math.PI/2, -Math.PI/2 + Math.PI * 2 * pct); ctx.stroke();
+    if (pct >= 1) {
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(px, mt + bh + 10, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  atkCoolPip(ml + bw + 14, p1.atkCool, p1.atkType ? ATK[p1.atkType].coolF : ATK.punch.coolF, '#5bf');
+  atkCoolPip(W - ml - bw - 14, p2.atkCool, p2.atkType ? ATK[p2.atkType].coolF : ATK.punch.coolF, '#fa6');
+}
+
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#0d0d25'); sky.addColorStop(1, '#1a1a38');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  [[55,38],[130,75],[210,28],[305,62],[455,22],[545,78],[685,42],[745,18],[375,88],[165,12],[500,50],[250,95]].forEach(([sx,sy]) => {
+    ctx.beginPath(); ctx.arc(sx, sy, 1, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // Ground
+  const gGrad = ctx.createLinearGradient(0, GROUND, 0, H);
+  gGrad.addColorStop(0, '#252535'); gGrad.addColorStop(1, '#111122');
+  ctx.fillStyle = gGrad; ctx.fillRect(0, GROUND + 4, W, H - GROUND - 4);
+  ctx.strokeStyle = '#4a4a6a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, GROUND + 4); ctx.lineTo(W, GROUND + 4); ctx.stroke();
+  ctx.strokeStyle = 'rgba(80,80,130,0.18)'; ctx.lineWidth = 1;
+  for (let gx = 0; gx < W; gx += 50) {
+    ctx.beginPath(); ctx.moveTo(gx, GROUND + 4); ctx.lineTo(gx, H); ctx.stroke();
+  }
+}
+
+function drawOverlay() {
+  if (state === 'countdown') {
+    const t = stateTimer;
+    if (t > 50) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${28 + (t - 50) * 0.6}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = Math.min(1, (t - 50) / 20);
+      ctx.fillText(`ROUND ${roundNum}`, W / 2, H / 2 - 10);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = '#5f5';
+      ctx.font = `bold ${40 + (50 - t) * 0.8}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = Math.min(1, t / 15);
+      ctx.fillText('FIGHT!', W / 2, H / 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  if (state === 'roundEnd') {
+    const loser = p1.hp <= 0 ? p1 : p2;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff4';
+    ctx.font = 'bold 54px monospace';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff4'; ctx.shadowBlur = 18;
+    ctx.fillText('K.O.', W / 2, H / 2 - 20);
+    ctx.shadowBlur = 0;
+    const winner = loser === p1 ? p2 : p1;
+    ctx.fillStyle = winner.color;
+    ctx.font = '20px monospace';
+    ctx.fillText(`${winner.name} wins the round!`, W / 2, H / 2 + 25);
+    if (stateTimer < 30) {
+      ctx.fillStyle = '#555'; ctx.font = '14px monospace';
+      ctx.fillText('Next round starting...', W / 2, H / 2 + 55);
+    }
+  }
+
+  if (state === 'matchOver') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    const col = matchWinnerName === 'P1' ? '#5bf' : '#fa6';
+    ctx.fillStyle = col;
+    ctx.font = 'bold 58px monospace';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = col; ctx.shadowBlur = 24;
+    ctx.fillText(`${matchWinnerName} WINS!`, W / 2, H / 2 - 20);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#666'; ctx.font = '18px monospace';
+    ctx.fillText('Press R to play again', W / 2, H / 2 + 30);
+  }
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────────
+function loop() {
+  // State transitions
+  if (state === 'countdown') {
+    stateTimer--;
+    if (stateTimer <= 0) state = 'fight';
+  }
+  if (state === 'roundEnd') {
+    stateTimer--;
+    if (stateTimer <= 0) initRound();
+  }
+
+  handleInput();
+
+  if (state === 'fight') {
+    updatePlayer(p1);
+    updatePlayer(p2);
+    checkHit(p1, p2);
+    checkHit(p2, p1);
+  }
+
+  // Screen shake offset
+  let sx = 0, sy = 0;
+  if (shakeTimer > 0) {
+    sx = (Math.random() - 0.5) * shakeStrX;
+    sy = (Math.random() - 0.5) * shakeStrY;
+    shakeTimer--;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  drawBackground();
+  drawParticles();
+  drawPlayer(p1);
+  drawPlayer(p2);
+  drawDmgNums();
+  drawCombo(p1, 'left');
+  drawCombo(p2, 'right');
+  drawHUD();
+  drawOverlay();
+
+  ctx.restore();
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
 </body>
 </html>
