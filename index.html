@@ -4,14 +4,42 @@
   <title>Stickman Fight</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0d0d1a; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; }
+    body { background: #0d0d1a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 16px 0; font-family: monospace; }
     canvas { display: block; border: 2px solid #333; }
     #controls { color: #444; font-size: 11px; margin-top: 8px; letter-spacing: 0.04em; }
     #controls span { color: #777; }
+    #uploads { display: flex; gap: 16px; margin-top: 10px; align-items: center; }
+    .upload-btn { display: flex; align-items: center; gap: 8px; }
+    .upload-btn input[type=file] { display: none; }
+    .upload-btn label {
+      padding: 5px 12px; background: #1a1a2e; border: 1px solid #333;
+      border-radius: 6px; font-size: 11px; font-family: monospace; cursor: pointer;
+    }
+    .upload-btn.p1 label { color: #5bf; border-color: #5bf; }
+    .upload-btn.p2 label { color: #fa6; border-color: #fa6; }
+    .upload-btn label:hover { background: #22223a; }
+    .avatar-preview {
+      width: 52px; height: 52px; border-radius: 50%;
+      display: none; cursor: grab; flex-shrink: 0;
+    }
+    .avatar-preview:active { cursor: grabbing; }
   </style>
+<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 </head>
 <body>
 <canvas id="game" width="800" height="460"></canvas>
+<div id="uploads">
+  <div class="upload-btn p1">
+    <canvas id="p1-preview" class="avatar-preview" width="52" height="52"></canvas>
+    <label for="p1-upload">P1 Head</label>
+    <input type="file" id="p1-upload" accept="image/*,.heic,.heif">
+  </div>
+  <div class="upload-btn p2">
+    <canvas id="p2-preview" class="avatar-preview" width="52" height="52"></canvas>
+    <label for="p2-upload">P2 Head</label>
+    <input type="file" id="p2-upload" accept="image/*,.heic,.heif">
+  </div>
+</div>
 <div id="controls">
   <span>P1:</span> ←→ move · ↑ jump · ↓ block · SPACE slash · ↓+SPACE heavy slash &nbsp;&nbsp;
   <span>P2:</span> AD move · W jump · S block · E slash · S+E heavy slash &nbsp;&nbsp;
@@ -20,6 +48,84 @@
 <script>
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+
+// Player head images: { img, dx, dy } — persists across rounds
+const headImages = { P1: null, P2: null };
+
+let activeDrag = null;
+window.addEventListener('mousemove', e => {
+  if (!activeDrag) return;
+  const d = headImages[activeDrag.key];
+  if (!d) return;
+  d.dx = activeDrag.startDx + (e.clientX - activeDrag.startX);
+  d.dy = activeDrag.startDy + (e.clientY - activeDrag.startY);
+  redrawPreview(activeDrag.key);
+});
+window.addEventListener('mouseup', () => { activeDrag = null; });
+window.addEventListener('touchmove', e => {
+  if (!activeDrag) return;
+  const d = headImages[activeDrag.key];
+  if (!d) return;
+  const t = e.touches[0];
+  d.dx = activeDrag.startDx + (t.clientX - activeDrag.startX);
+  d.dy = activeDrag.startDy + (t.clientY - activeDrag.startY);
+  redrawPreview(activeDrag.key);
+}, { passive: true });
+window.addEventListener('touchend', () => { activeDrag = null; });
+
+function redrawPreview(key) {
+  const d = headImages[key];
+  const el = document.getElementById(key === 'P1' ? 'p1-preview' : 'p2-preview');
+  if (!d || !el) return;
+  const S = el.width, pc = el.getContext('2d');
+  pc.clearRect(0, 0, S, S);
+  pc.save();
+  pc.beginPath(); pc.arc(S/2, S/2, S/2 - 1, 0, Math.PI * 2); pc.clip();
+  pc.drawImage(d.img, d.dx, d.dy, S, S);
+  pc.restore();
+  pc.strokeStyle = key === 'P1' ? '#5bf' : '#fa6';
+  pc.lineWidth = 2;
+  pc.beginPath(); pc.arc(S/2, S/2, S/2 - 1, 0, Math.PI * 2); pc.stroke();
+}
+
+async function setupUpload(inputId, previewId, playerKey) {
+  const previewEl = document.getElementById(previewId);
+
+  previewEl.addEventListener('mousedown', e => {
+    const d = headImages[playerKey];
+    if (!d) return;
+    activeDrag = { key: playerKey, startX: e.clientX, startY: e.clientY, startDx: d.dx, startDy: d.dy };
+    e.preventDefault();
+  });
+  previewEl.addEventListener('touchstart', e => {
+    const d = headImages[playerKey];
+    if (!d) return;
+    const t = e.touches[0];
+    activeDrag = { key: playerKey, startX: t.clientX, startY: t.clientY, startDx: d.dx, startDy: d.dy };
+  }, { passive: true });
+
+  document.getElementById(inputId).addEventListener('change', async e => {
+    let file = e.target.files[0];
+    if (!file) return;
+    if (file.type === 'image/heic' || file.type === 'image/heif' ||
+        file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif')) {
+      try {
+        const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+        file = new File([blob], file.name.replace(/\.heic$/i, '.jpg'), { type: 'image/jpeg' });
+      } catch (err) { console.error('HEIC conversion failed:', err); return; }
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      headImages[playerKey] = { img, dx: 0, dy: 0 };
+      previewEl.style.display = 'block';
+      redrawPreview(playerKey);
+    };
+    img.src = url;
+  });
+}
+setupUpload('p1-upload', 'p1-preview', 'P1');
+setupUpload('p2-upload', 'p2-preview', 'P2');
 const W = canvas.width, H = canvas.height;
 const GROUND = 390;
 const GRAVITY = 0.55;
@@ -333,9 +439,20 @@ function drawPlayer(p) {
   ctx.strokeStyle = col; ctx.fillStyle = col;
 
   // Head
-  ctx.beginPath(); ctx.arc(x, y - 86 + hunch * 0.4, 13, 0, Math.PI * 2); ctx.stroke();
-  // Eye
-  ctx.beginPath(); ctx.arc(x + f * 5, y - 88 + hunch * 0.4, 2, 0, Math.PI * 2); ctx.fill();
+  const headData = headImages[p.name];
+  const hr = 18;
+  const hx = x, hy = y - 73 - hr + hunch * 0.4; // keep head bottom at body top
+  if (headData) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.clip();
+    ctx.drawImage(headData.img, hx - hr + headData.dx, hy - hr + headData.dy, hr * 2, hr * 2);
+    ctx.restore();
+    ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + f * 6, hy - 3, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
 
   // Body
   ctx.beginPath();
@@ -408,11 +525,11 @@ function drawPlayer(p) {
   // Name
   ctx.fillStyle = col; ctx.globalAlpha = 0.75;
   ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
-  ctx.fillText(p.name, x, y - 104);
+  ctx.fillText(p.name, x, hy - hr - 6);
   ctx.globalAlpha = 1;
 
   // Floating HP bar above player
-  const bw = 50, bh = 5, bx = x - bw / 2, by = y - 118;
+  const bw = 50, bh = 5, bx = x - bw / 2, by = hy - hr - 20;
   const hpPct     = p.hp / p.maxHp;
   const ghostPct  = p.displayHp / p.maxHp;
   // Track
